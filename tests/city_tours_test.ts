@@ -40,6 +40,8 @@ Clarinet.test({
             Tx.contractCall('city_tours', 'verify-guide', [types.principal(guide.address)], deployer.address)
         ]);
 
+        const startBlock = chain.blockHeight + 200;
+
         // Create tour
         let tourBlock = chain.mineBlock([
             Tx.contractCall('city_tours', 'create-tour', [
@@ -47,7 +49,8 @@ Clarinet.test({
                 types.utf8("Explore the heart of Paris"),
                 types.uint(100),
                 types.uint(180),
-                types.ascii("Paris")
+                types.ascii("Paris"),
+                types.uint(startBlock)
             ], guide.address)
         ]);
 
@@ -76,7 +79,7 @@ Clarinet.test({
 });
 
 Clarinet.test({
-    name: "Review submission flow",
+    name: "Early cancellation and refund flow",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const deployer = accounts.get('deployer')!;
         const guide = accounts.get('wallet_1')!;
@@ -85,17 +88,23 @@ Clarinet.test({
         // Setup complete tour booking
         let setup = chain.mineBlock([
             Tx.contractCall('city_tours', 'register-as-guide', [], guide.address),
-            Tx.contractCall('city_tours', 'verify-guide', [types.principal(guide.address)], deployer.address),
+            Tx.contractCall('city_tours', 'verify-guide', [types.principal(guide.address)], deployer.address)
+        ]);
+
+        const startBlock = chain.blockHeight + 200;
+
+        let tour = chain.mineBlock([
             Tx.contractCall('city_tours', 'create-tour', [
                 types.ascii("Paris Walking Tour"),
                 types.utf8("Explore the heart of Paris"),
                 types.uint(100),
                 types.uint(180),
-                types.ascii("Paris")
+                types.ascii("Paris"),
+                types.uint(startBlock)
             ], guide.address)
         ]);
 
-        let tourId = setup.receipts[2].result.expectOk();
+        let tourId = tour.receipts[0].result.expectOk();
         
         let booking = chain.mineBlock([
             Tx.contractCall('city_tours', 'book-tour', [tourId], traveler.address)
@@ -103,17 +112,73 @@ Clarinet.test({
 
         let bookingId = booking.receipts[0].result.expectOk();
 
-        // Submit review
-        let reviewBlock = chain.mineBlock([
-            Tx.contractCall('city_tours', 'submit-review', [
-                bookingId,
-                types.uint(5)
+        // Cancel tour early (should get full refund)
+        let cancelBlock = chain.mineBlock([
+            Tx.contractCall('city_tours', 'cancel-tour', [
+                bookingId
             ], traveler.address)
         ]);
 
-        reviewBlock.receipts[0].result.expectOk();
+        cancelBlock.receipts[0].result.expectOk();
 
-        // Verify guide rating updated
+        // Verify booking status and refund
+        let bookingInfo = chain.callReadOnlyFn(
+            'city_tours',
+            'get-booking-details',
+            [bookingId],
+            deployer.address
+        );
+        
+        let updatedBooking = bookingInfo.result.expectSome();
+        assertEquals(updatedBooking['status'], "cancelled-by-traveler");
+        assertEquals(updatedBooking['refund-status'].value, true);
+    }
+});
+
+Clarinet.test({
+    name: "Guide cancellation flow",
+    async fn(chain: Chain, accounts: Map<string, Account>) {
+        const deployer = accounts.get('deployer')!;
+        const guide = accounts.get('wallet_1')!;
+        const traveler = accounts.get('wallet_2')!;
+
+        // Setup
+        let setup = chain.mineBlock([
+            Tx.contractCall('city_tours', 'register-as-guide', [], guide.address),
+            Tx.contractCall('city_tours', 'verify-guide', [types.principal(guide.address)], deployer.address)
+        ]);
+
+        const startBlock = chain.blockHeight + 200;
+
+        let tour = chain.mineBlock([
+            Tx.contractCall('city_tours', 'create-tour', [
+                types.ascii("Paris Walking Tour"),
+                types.utf8("Explore the heart of Paris"),
+                types.uint(100),
+                types.uint(180),
+                types.ascii("Paris"),
+                types.uint(startBlock)
+            ], guide.address)
+        ]);
+
+        let tourId = tour.receipts[0].result.expectOk();
+        
+        let booking = chain.mineBlock([
+            Tx.contractCall('city_tours', 'book-tour', [tourId], traveler.address)
+        ]);
+
+        let bookingId = booking.receipts[0].result.expectOk();
+
+        // Guide cancels tour
+        let cancelBlock = chain.mineBlock([
+            Tx.contractCall('city_tours', 'cancel-tour', [
+                bookingId
+            ], guide.address)
+        ]);
+
+        cancelBlock.receipts[0].result.expectOk();
+
+        // Verify guide cancellation count increased
         let guideInfo = chain.callReadOnlyFn(
             'city_tours',
             'get-guide-info',
@@ -122,7 +187,6 @@ Clarinet.test({
         );
         
         let info = guideInfo.result.expectSome();
-        assertEquals(info['rating'], types.uint(5));
-        assertEquals(info['total-reviews'], types.uint(1));
+        assertEquals(info['cancellations'], types.uint(1));
     }
 });
