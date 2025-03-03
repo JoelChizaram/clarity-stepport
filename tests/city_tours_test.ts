@@ -1,5 +1,3 @@
-[previous test content...]
-
 Clarinet.test({
     name: "Review system validation",
     async fn(chain: Chain, accounts: Map<string, Account>) {
@@ -34,6 +32,11 @@ Clarinet.test({
 
         let bookingId = booking.receipts[0].result.expectOk();
 
+        // Complete the booking
+        chain.mineBlock([
+            Tx.contractCall('city_tours', 'complete-booking', [bookingId], guide.address)
+        ]);
+
         // Test invalid rating
         let invalidReview = chain.mineBlock([
             Tx.contractCall('city_tours', 'submit-review', [
@@ -53,5 +56,15 @@ Clarinet.test({
         ]);
 
         validReview.receipts[0].result.expectOk();
+
+        // Test duplicate review
+        let duplicateReview = chain.mineBlock([
+            Tx.contractCall('city_tours', 'submit-review', [
+                bookingId,
+                types.uint(4)
+            ], traveler.address)
+        ]);
+
+        duplicateReview.receipts[0].result.expectErr(102); // err-unauthorized
     }
 });
